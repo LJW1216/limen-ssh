@@ -1,0 +1,22 @@
+# Build output
+bin/
+obj/
+outputs/
+*.user
+
+# Release artifacts — attach these to a GitHub Release, not the repo
+*.exe
+*.zip
+*.pdb
+
+# Local session data. Never commit: it holds DPAPI-encrypted credentials.
+sessions*.json
+window.json
+theme.txt
+terminal.txt
+language.txt
+
+# Editors
+.vs/
+.idea/
+*.swp
