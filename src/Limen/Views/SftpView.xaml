@@ -1,0 +1,301 @@
+<UserControl x:Class="Limen.SftpView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="clr-namespace:Limen"
+             xmlns:local="clr-namespace:Limen"
+             Background="{DynamicResource Panel}" FontFamily="{StaticResource UiFont}"
+             AllowDrop="True" Drop="Local_Drop">
+    <UserControl.Resources>
+        <Style x:Key="PaneHeader" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource PanelAlt}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        </Style>
+
+        <Style x:Key="FileList" TargetType="ListView">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="SelectionMode" Value="Extended"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+        </Style>
+
+        <!-- Name cell: a glyph carries "folder vs file" instead of [brackets]. -->
+        <DataTemplate x:Key="NameCell">
+            <StackPanel Orientation="Horizontal" Margin="0,3">
+                <Path x:Name="Glyph" Style="{StaticResource IcoSoft}" Data="{StaticResource IcoFile}"
+                      Width="15" Height="15" Margin="0,0,8,0"/>
+                <TextBlock x:Name="Label" Text="{Binding Display}" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Ink}"/>
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsDirectory}" Value="True">
+                    <Setter TargetName="Glyph" Property="Data" Value="{StaticResource IcoFolder}"/>
+                    <Setter TargetName="Glyph" Property="Stroke" Value="{DynamicResource Accent}"/>
+                    <Setter TargetName="Label" Property="FontWeight" Value="SemiBold"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsParent}" Value="True">
+                    <Setter TargetName="Glyph" Property="Data" Value="{StaticResource IcoUp}"/>
+                    <Setter TargetName="Glyph" Property="Stroke" Value="{DynamicResource Faint}"/>
+                    <Setter TargetName="Label" Property="FontWeight" Value="Normal"/>
+                    <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource Faint}"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <DataTemplate x:Key="SizeCell">
+            <TextBlock Text="{Binding SizeText}" HorizontalAlignment="Right" Margin="0,0,10,0"
+                       FontFamily="{StaticResource MonoFont}" FontSize="11.5"
+                       Foreground="{DynamicResource Muted}"/>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ModifiedCell">
+            <TextBlock Text="{Binding ModifiedText}" FontFamily="{StaticResource MonoFont}" FontSize="11.5"
+                       Foreground="{DynamicResource Faint}"/>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="LocalColumn" Width="*"/>
+            <ColumnDefinition x:Name="TransferColumn" Width="58"/>
+            <ColumnDefinition x:Name="RemoteColumn" Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Border x:Name="TagStrip" Grid.ColumnSpan="3" Height="3" Visibility="Collapsed"/>
+
+        <!-- ============================= 로컬 ============================= -->
+        <Border x:Name="LocalPane" Grid.Row="1" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Border Style="{StaticResource PaneHeader}">
+                    <StackPanel Orientation="Horizontal" Margin="10,0">
+                        <Border Style="{StaticResource Badge}" Margin="0,0,8,0">
+                            <TextBlock Text="{loc:T Sftp.Local}" Style="{StaticResource BadgeText}"/>
+                        </Border>
+                        <TextBlock Text="{loc:T Sftp.ThisComputer}" Style="{StaticResource SectionHeader}"/>
+                    </StackPanel>
+                </Border>
+
+                <DockPanel Grid.Row="1" Margin="8,7">
+                    <Button DockPanel.Dock="Left" Style="{StaticResource MiniIconButton}" Margin="0,0,6,0"
+                            ToolTip="{loc:T Common.ParentFolderHint}" Click="LocalUp_Click">
+                        <Path Style="{StaticResource Ico}" Data="{StaticResource IcoUp}"/>
+                    </Button>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource MiniIconButton}" Margin="4,0,0,0"
+                            ToolTip="{loc:T Common.DeleteSelection}" Click="LocalDelete_Click">
+                        <Path Style="{StaticResource Ico}" Data="{StaticResource IcoTrash}"/>
+                    </Button>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource MiniIconButton}" Margin="4,0,0,0"
+                            ToolTip="{loc:T Common.NewFolder}" Click="LocalNewFolder_Click">
+                        <Path Style="{StaticResource Ico}" Data="{StaticResource IcoFolderPlus}"/>
+                    </Button>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource MiniIconButton}" Margin="6,0,0,0"
+                            ToolTip="{loc:T Common.Refresh}" Click="LocalRefresh_Click">
+                        <Path Style="{StaticResource Ico}" Data="{StaticResource IcoRefresh}"/>
+                    </Button>
+                    <TextBox x:Name="LocalPathBox" Style="{StaticResource MonoField}" Height="28"
+                             local:Ui.Placeholder="{loc:T Sftp.PathPlaceholder}" KeyDown="LocalPath_KeyDown"/>
+                </DockPanel>
+
+                <ListView x:Name="LocalList" Grid.Row="2" Style="{StaticResource FileList}"
+                          MouseDoubleClick="LocalList_MouseDoubleClick" KeyDown="LocalList_KeyDown">
+                    <ListView.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="{loc:T Sftp.Upload}" Click="Upload_Click">
+                                <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoArrowRight}"/></MenuItem.Icon>
+                            </MenuItem>
+                            <Separator/>
+                            <MenuItem Header="{loc:T Common.Rename}" InputGestureText="F2" Click="LocalRename_Click">
+                                <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoPencil}"/></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="{loc:T Common.NewFolder}" Click="LocalNewFolder_Click">
+                                <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoFolderPlus}"/></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="{loc:T Common.Delete}" Click="LocalDelete_Click">
+                                <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoTrash}"/></MenuItem.Icon>
+                            </MenuItem>
+                            <Separator/>
+                            <MenuItem Header="{loc:T Common.Refresh}" Click="LocalRefresh_Click">
+                                <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoRefresh}"/></MenuItem.Icon>
+                            </MenuItem>
+                        </ContextMenu>
+                    </ListView.ContextMenu>
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="{loc:T Common.Name}" Width="240" CellTemplate="{StaticResource NameCell}"/>
+                            <GridViewColumn Header="{loc:T Common.Size}" Width="90" CellTemplate="{StaticResource SizeCell}"/>
+                            <GridViewColumn Header="{loc:T Common.Modified}" Width="124" CellTemplate="{StaticResource ModifiedCell}"/>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+                <TextBlock Grid.Row="2" Text="{loc:T Sftp.EmptyFolder}" TextAlignment="Center"
+                           VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource Hint}">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Items.Count, ElementName=LocalList}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Grid>
+        </Border>
+
+        <!-- =========================== 전송 버튼 =========================== -->
+        <StackPanel x:Name="TransferPane" Grid.Row="1" Grid.Column="1" VerticalAlignment="Center" Margin="7,0">
+            <Button x:Name="UploadButton" Style="{StaticResource FlatButton}" MinWidth="0" Width="44" Height="36"
+                    Padding="0" ToolTip="{loc:T Sftp.UploadHint}" Click="Upload_Click">
+                <Path Style="{StaticResource Ico}" Data="{StaticResource IcoArrowRight}"/>
+            </Button>
+            <Button x:Name="DownloadButton" Style="{StaticResource FlatButton}" MinWidth="0" Width="44" Height="36"
+                    Padding="0" Margin="0,7,0,0" ToolTip="{loc:T Sftp.DownloadHint}" Click="Download_Click">
+                <Path Style="{StaticResource Ico}" Data="{StaticResource IcoArrowLeft}"/>
+            </Button>
+            <Button x:Name="CancelButton" Style="{StaticResource DangerButton}" MinWidth="0" Width="44" Height="30"
+                    Padding="0" Margin="0,14,0,0" IsEnabled="False" ToolTip="{loc:T Sftp.CancelHint}"
+                    Click="CancelTransfer_Click">
+                <Path Style="{StaticResource Ico}" Data="{StaticResource IcoStop}"/>
+            </Button>
+        </StackPanel>
+
+        <!-- ============================= 원격 ============================= -->
+        <Grid Grid.Row="1" Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="30"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Border Style="{StaticResource PaneHeader}">
+                <StackPanel Orientation="Horizontal" Margin="10,0">
+                    <Border Style="{StaticResource Badge}" Margin="0,0,8,0">
+                        <TextBlock Text="{loc:T Sftp.Remote}" Style="{StaticResource BadgeText}"/>
+                    </Border>
+                    <TextBlock x:Name="RemoteHeader" Text="{loc:T Sftp.Remote}" Style="{StaticResource SectionHeader}"
+                               TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+            </Border>
+
+            <DockPanel Grid.Row="1" Margin="8,7">
+                <Button DockPanel.Dock="Left" Style="{StaticResource MiniIconButton}" Margin="0,0,6,0"
+                        ToolTip="{loc:T Common.ParentFolder}" Click="RemoteUp_Click">
+                    <Path Style="{StaticResource Ico}" Data="{StaticResource IcoUp}"/>
+                </Button>
+                <Button DockPanel.Dock="Right" Style="{StaticResource MiniIconButton}" Margin="4,0,0,0"
+                        ToolTip="{loc:T Common.DeleteSelection}" Click="RemoteDelete_Click">
+                    <Path Style="{StaticResource Ico}" Data="{StaticResource IcoTrash}"/>
+                </Button>
+                <Button DockPanel.Dock="Right" Style="{StaticResource MiniIconButton}" Margin="4,0,0,0"
+                        ToolTip="{loc:T Common.NewFolder}" Click="RemoteNewFolder_Click">
+                    <Path Style="{StaticResource Ico}" Data="{StaticResource IcoFolderPlus}"/>
+                </Button>
+                <Button DockPanel.Dock="Right" Style="{StaticResource MiniIconButton}" Margin="6,0,0,0"
+                        ToolTip="{loc:T Common.Refresh}" Click="RemoteRefresh_Click">
+                    <Path Style="{StaticResource Ico}" Data="{StaticResource IcoRefresh}"/>
+                </Button>
+                <TextBox x:Name="RemotePathBox" Style="{StaticResource MonoField}" Height="28"
+                         local:Ui.Placeholder="{loc:T Sftp.RemotePathPlaceholder}" KeyDown="RemotePath_KeyDown"/>
+            </DockPanel>
+
+            <ListView x:Name="RemoteList" Grid.Row="2" Style="{StaticResource FileList}"
+                      MouseDoubleClick="RemoteList_MouseDoubleClick"
+                      PreviewMouseLeftButtonDown="RemoteList_PreviewMouseLeftButtonDown"
+                      PreviewMouseLeftButtonUp="RemoteList_PreviewMouseLeftButtonUp"
+                      PreviewMouseMove="RemoteList_PreviewMouseMove"
+                      KeyDown="RemoteList_KeyDown"
+                      ToolTip="{loc:T Sftp.DragHint}">
+                <ListView.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="{loc:T Sftp.Download}" Click="Download_Click">
+                            <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoArrowLeft}"/></MenuItem.Icon>
+                        </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="{loc:T Common.Rename}" InputGestureText="F2" Click="RemoteRename_Click">
+                            <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoPencil}"/></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="{loc:T Sftp.Permissions}" Click="RemoteChmod_Click">
+                            <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoKey}"/></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="{loc:T Common.NewFolder}" Click="RemoteNewFolder_Click">
+                            <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoFolderPlus}"/></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="{loc:T Common.Delete}" Click="RemoteDelete_Click">
+                            <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoTrash}"/></MenuItem.Icon>
+                        </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="{loc:T Common.Refresh}" Click="RemoteRefresh_Click">
+                            <MenuItem.Icon><Path Style="{StaticResource IcoSoft}" Data="{StaticResource IcoRefresh}"/></MenuItem.Icon>
+                        </MenuItem>
+                    </ContextMenu>
+                </ListView.ContextMenu>
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="{loc:T Common.Name}" Width="240" CellTemplate="{StaticResource NameCell}"/>
+                        <GridViewColumn Header="{loc:T Common.Size}" Width="90" CellTemplate="{StaticResource SizeCell}"/>
+                        <GridViewColumn Header="{loc:T Common.Modified}" Width="124" CellTemplate="{StaticResource ModifiedCell}"/>
+                    </GridView>
+                </ListView.View>
+            </ListView>
+            <TextBlock Grid.Row="2" Text="{loc:T Sftp.EmptyFolder}" TextAlignment="Center"
+                       VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource Hint}">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Items.Count, ElementName=RemoteList}" Value="0">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <!-- Connection overlay: one place that owns connecting / failed. -->
+            <Border x:Name="RemoteOverlay" Grid.Row="1" Grid.RowSpan="2" Background="{DynamicResource OverlayBack}">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="400">
+                    <ProgressBar x:Name="ConnectSpinner" Width="200" Height="4" IsIndeterminate="True"
+                                 HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="RemoteOverlayText" Text="{loc:T Sftp.Connecting}" TextAlignment="Center"
+                               Margin="0,16,0,0" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{DynamicResource Ink}" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="RemoteOverlayDetail" Style="{StaticResource Hint}" TextAlignment="Center"
+                               Margin="0,7,0,0" Visibility="Collapsed"/>
+                    <Button x:Name="RemoteRetryButton" Style="{StaticResource FlatButton}"
+                            HorizontalAlignment="Center" Margin="0,16,0,0" Visibility="Collapsed"
+                            Click="RemoteRetry_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource Ico}" Data="{StaticResource IcoRefresh}" Margin="0,0,8,0"/>
+                            <TextBlock Text="{loc:T Common.Retry}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- =========================== 진행 상태 =========================== -->
+        <Border x:Name="StatusStrip" Grid.Row="2" Grid.ColumnSpan="3" Background="{DynamicResource Chrome}"
+                BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Height="34">
+            <DockPanel Margin="12,0">
+                <ProgressBar x:Name="TransferBar" DockPanel.Dock="Right" Width="220" Height="6"
+                             VerticalAlignment="Center" Visibility="Collapsed" Margin="12,0,0,0"/>
+                <TextBlock x:Name="TransferText" Text="{loc:T Sftp.Idle}" Style="{StaticResource Hint}" FontSize="11.5"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </Border>
+    </Grid>
+</UserControl>
