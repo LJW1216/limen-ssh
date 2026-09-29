@@ -272,6 +272,7 @@ public static class TerminalHtml
           else if (m.type === 'notice') term.write(m.text);
           else if (m.type === 'theme') applyTheme(m.theme, m.ui);
           else if (m.type === 'font') setFont(m.size, false);
+          else if (m.type === 'paste') term.paste(m.text);
         });
 
         window.terminalFocus = () => term.focus();

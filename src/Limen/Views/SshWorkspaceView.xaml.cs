@@ -31,6 +31,7 @@ public partial class SshWorkspaceView : UserControl, IDisposable
         _terminal.ConnectedChanged += Terminal_ConnectedChanged;
         _terminal.RemoteDirectoryChanged += Terminal_RemoteDirectoryChanged;
         _terminal.MetricsChanged += Terminal_MetricsChanged;
+        _terminal.LoggingChanged += ApplyLogState;
         // Severity colours come from theme brushes, so a theme flip has to
         // repaint the gauges with the sample already on screen.
         ThemeManager.Changed += OnThemeChanged;

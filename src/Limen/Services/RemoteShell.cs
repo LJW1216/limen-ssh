@@ -5,8 +5,11 @@ namespace Limen;
 /// The one thing a delete needs from a shell, narrow enough to fake in a test.
 public interface IRemoteShell
 {
-    bool TryRun(string command, out string error);
+    ShellResult Run(string command);
 }
+
+public enum ShellState { NotStarted, Exited, Unknown }
+public sealed record ShellResult(ShellState State, int? ExitCode = null, string Error = "");
 
 /// Runs a shell command on the same host an SFTP session is already talking to.
 ///
@@ -14,7 +17,7 @@ public interface IRemoteShell
 /// and "remove this empty directory", so a client has to walk the whole tree,
 /// paying a round trip per entry. Deleting a node_modules over a 20 ms link
 /// takes twenty minutes that way. One `rm -rf` on the server takes seconds.
-public sealed class RemoteShell(ConnectionInfo connectionInfo) : IRemoteShell, IDisposable
+public sealed class RemoteShell(ConnectionInfo connectionInfo, string expectedFingerprint) : IRemoteShell, IDisposable
 {
     private SshClient? _client;
     private bool _unavailable;
@@ -25,12 +28,17 @@ public sealed class RemoteShell(ConnectionInfo connectionInfo) : IRemoteShell, I
     private bool TryConnect()
     {
         if (_disposed || _unavailable) return false;
+        if (string.IsNullOrEmpty(expectedFingerprint)) return false;
         if (_client is { IsConnected: true }) return true;
 
         try
         {
             _client?.Dispose();
             _client = new SshClient(connectionInfo);
+            // This is an auxiliary connection to the already-approved SFTP
+            // server. Never prompt to replace its key during a delete.
+            _client.HostKeyReceived += (_, e) =>
+                e.CanTrust = MatchesHostKey(expectedFingerprint, e.FingerPrintSHA256);
             _client.Connect();
             return true;
         }
@@ -43,28 +51,28 @@ public sealed class RemoteShell(ConnectionInfo connectionInfo) : IRemoteShell, I
         }
     }
 
-    /// True when the command ran and reported success. False means the caller
-    /// should fall back — no shell, a restricted shell, or rm refused.
-    public bool TryRun(string command, out string error)
+    internal static bool MatchesHostKey(string expected, string offered) =>
+        expected.Length > "SHA256:".Length && expected == "SHA256:" + offered;
+
+    // A timeout/disconnection after dispatch does not prove the process stopped.
+    // Callers must never start another recursive delete for an Unknown result.
+    public ShellResult Run(string command)
     {
-        error = string.Empty;
-        if (!TryConnect()) return false;
+        if (!TryConnect()) return new(ShellState.NotStarted);
 
         try
         {
             using var run = _client!.CreateCommand(command);
             run.CommandTimeout = TimeSpan.FromMinutes(10);
             run.Execute();
-            if (run.ExitStatus == 0) return true;
-
-            error = run.Error.Trim().Length > 0 ? run.Error.Trim() : $"exit {run.ExitStatus}";
-            return false;
+            return run.ExitStatus is { } code
+                ? new(ShellState.Exited, code, run.Error.Trim())
+                : new(ShellState.Unknown, Error: "No exit status received");
         }
         catch (Exception ex)
         {
-            error = ex.Message;
             _unavailable = true;
-            return false;
+            return new(ShellState.Unknown, Error: ex.Message);
         }
     }
 
@@ -75,11 +83,13 @@ public sealed class RemoteShell(ConnectionInfo connectionInfo) : IRemoteShell, I
     /// Paths a recursive delete must never touch, however the caller got here.
     public static bool IsDangerous(string path)
     {
-        var trimmed = path.Trim();
+        var trimmed = path;
         if (trimmed.Length == 0 || trimmed is "/" or "~" or "." or "..") return true;
         if (trimmed.Contains('\n') || trimmed.Contains('\r')) return true;
         if (trimmed.Contains('*') || trimmed.Contains('?')) return true;
         if (!trimmed.StartsWith('/')) return true;
+        if (trimmed.Contains('\0')) return true;
+        if (trimmed.Split('/').Any(part => part is "." or "..")) return true;
 
         // A single top-level component — /etc, /usr, /home — is almost never
         // what someone means to delete from a file browser.

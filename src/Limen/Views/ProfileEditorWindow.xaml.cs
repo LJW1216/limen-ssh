@@ -167,6 +167,11 @@ public partial class ProfileEditorWindow : Window
 
         Profile.Name = NameBox.Text.Trim().Length == 0 ? HostBox.Text.Trim() : NameBox.Text.Trim();
         Profile.Folder = FolderBox.Text.Trim().Trim('/', '\\');
+        // A pinned key belongs to one endpoint. Carried over to another host —
+        // a duplicated session pointed somewhere new — it turns the first
+        // connection into a "key changed, possible attack" warning, and teaches
+        // people to click through the one prompt that must never be routine.
+        if (!SameEndpoint(Profile, HostBox.Text.Trim(), port)) Profile.HostKeyFingerprint = string.Empty;
         Profile.Host = HostBox.Text.Trim();
         Profile.Port = port;
         Profile.UserName = UserBox.Text.Trim();
@@ -195,6 +200,9 @@ public partial class ProfileEditorWindow : Window
 
         DialogResult = true;
     }
+
+    internal static bool SameEndpoint(SshProfile profile, string host, int port) =>
+        profile.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && profile.Port == port;
 
     /// Typed text replaces the secret; an empty box keeps whatever is already
     /// stored. Clearing goes through "자격 증명 삭제", which zeroes the profile

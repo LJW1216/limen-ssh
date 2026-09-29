@@ -25,10 +25,10 @@ Terminal, SFTP browser and saved credentials in one window — no install, no ac
 - **Saved credentials** — passwords and key passphrases encrypted with Windows DPAPI.
 - **Jump hosts** — one-hop bastion tunnelling, with the bastion stored as an ordinary session.
 - **Terminal** — xterm.js over SSH.NET. 256 colours, resize, interactive programs, scrollback search (<kbd>Ctrl</kbd>+<kbd>F</kbd>), font scaling (<kbd>Ctrl</kbd>+wheel).
-- **SFTP** — split local/remote browser, recursive transfers, drag and drop to Explorer, rename and chmod. Deleting a folder runs one `rm -rf` on the server instead of a per-file walk — but only after proving the shell resolves the path to the same directory the browser is showing, which a chrooted SFTP subsystem does not.
+- **SFTP** — split local/remote browser, recursive transfers, drag and drop to Explorer, rename and chmod. Fast folder deletion stages the selected directory under a private temporary name, verifies its marker using a host-key-pinned shell, and removes its contents on the server. A recreated directory at the original path is left alone. Safe preflight failures use SFTP; interrupted or uncertain deletion stops and reports the recovery path instead of retrying.
 - **Live resource strip** — CPU, memory, GPU and disk for the connected host, coloured by severity.
 - **Session recording** — write terminal output to a plain text file, escape codes stripped.
-- **Safety rails** — multi-line pastes are confirmed before they reach the shell; host key changes are flagged.
+- **Safety rails** — a paste that contains a line break, a trailing one included, is confirmed before it reaches the shell; host key changes are flagged.
 - **Dark and light themes** — including the window frame and the terminal palette.
 - **English and Korean** — switch at runtime from the toolbar.
 

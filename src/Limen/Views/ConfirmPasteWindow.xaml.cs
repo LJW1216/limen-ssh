@@ -17,7 +17,9 @@ public partial class ConfirmPasteWindow : Window
             .TrimEnd('\n')
             .Split('\n');
 
-        HeadingText.Text = Strings.Format("Paste.LineCount", lines.Length);
+        HeadingText.Text = lines.Length == 1
+            ? Strings.Get("Paste.TrailingNewline")
+            : Strings.Format("Paste.LineCount", lines.Length);
         PreviewText.Text = string.Join(Environment.NewLine, lines.Take(PreviewLines));
 
         if (lines.Length > PreviewLines)
@@ -29,9 +31,10 @@ public partial class ConfirmPasteWindow : Window
         Loaded += (_, _) => AcceptButton.Focus();
     }
 
-    /// True when the text would run more than one command on arrival.
-    public static bool NeedsConfirmation(string text) =>
-        text.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n').Contains('\n');
+    /// True when any line break is present — a trailing one included. A single
+    /// command copied together with its line ending runs the instant it lands,
+    /// which is exactly the paste nobody meant to execute.
+    public static bool NeedsConfirmation(string text) => text.Contains('\n') || text.Contains('\r');
 
     private void Accept_Click(object sender, RoutedEventArgs e) => DialogResult = true;
 }

@@ -18,7 +18,12 @@ internal static class Program
     {
         if (args.Contains("--regression-only"))
         {
-            RegressionTests.Run();
+            try { RegressionTests.Run(); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(ex);
+                Environment.Exit(1);
+            }
             return;
         }
         VerifyJumpProfileMigration();

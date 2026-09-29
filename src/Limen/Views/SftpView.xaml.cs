@@ -18,6 +18,7 @@ public partial class SftpView : UserControl, IDisposable
     private ISftpClient? _client;
     private SshConnectionRoute? _route;
     private RemoteShell? _shell;
+    private string _sftpFingerprint = string.Empty;
     private readonly bool _remoteOnly;
     private readonly SemaphoreSlim _navigationLock = new(1, 1);
     private long _navigationVersion;
@@ -140,7 +141,7 @@ public partial class SftpView : UserControl, IDisposable
 
         try
         {
-            var (client, route) = await Task.Run(() =>
+            var (client, route, connectedFingerprint) = await Task.Run(() =>
             {
                 var openedRoute = _connector.OpenRoute(_profile, credentials, jumpCredentials);
                 var sftp = new SftpClient(openedRoute.ConnectionInfo)
@@ -150,8 +151,13 @@ public partial class SftpView : UserControl, IDisposable
                 try
                 {
                     _connector.PinHostKey(sftp, _profile);
+                    var fingerprint = string.Empty;
+                    sftp.HostKeyReceived += (_, e) =>
+                    {
+                        if (e.CanTrust) fingerprint = "SHA256:" + e.FingerPrintSHA256;
+                    };
                     sftp.Connect();
-                    return (sftp, openedRoute);
+                    return (sftp, openedRoute, fingerprint);
                 }
                 catch (Exception ex)
                 {
@@ -173,6 +179,7 @@ public partial class SftpView : UserControl, IDisposable
 
             _client = client;
             _route = route;
+            _sftpFingerprint = connectedFingerprint;
             _remoteHome = _remotePath = client.WorkingDirectory;
             _connector.Remember(_profile, credentials);
             if (jumpCredentials is not null) _connector.RememberJump(_profile, jumpCredentials);
@@ -678,51 +685,22 @@ public partial class SftpView : UserControl, IDisposable
         var fast = false;
         foreach (var entry in targets)
         {
-            if (entry.IsDirectory && TryDeleteOnServer(entry.FullPath))
+            if (entry.IsDirectory && _client is not null && _route is not null)
             {
-                fast = true;
-                continue;
+                var result = ServerDelete.TryDelete(entry.FullPath, _client, Shell(),
+                    staged => DeleteRemote(staged, isDirectory: true));
+                if (result != ServerDeleteResult.NotApplicable)
+                {
+                    fast |= result == ServerDeleteResult.DeletedFast;
+                    continue;
+                }
             }
             DeleteRemote(entry.FullPath, entry.IsDirectory);
         }
         return fast;
     }
 
-    // A chrooted SFTP subsystem and an SSH shell need not share a filesystem
-    // root: the /data/foo the user is browsing can be /home/u/data/foo to the
-    // shell, and handing that path to rm would delete something else entirely.
-    // So prove the two agree before trusting rm — write a marker only this call
-    // could have produced, through SFTP, and ask the shell to find it at the
-    // same absolute path. Any failure at all falls back to the protocol walk.
-    private bool TryDeleteOnServer(string path) =>
-        _client is not null && _route is not null && TryDeleteOnServer(path, _client, Shell());
-
-    internal static bool TryDeleteOnServer(string path, ISftpClient client, IRemoteShell shell)
-    {
-        if (RemoteShell.IsDangerous(path)) return false;
-        // rm -rf on a symlink removes the link; the walk below does the same,
-        // just as fast. Keep the one code path that already handles it.
-        try { if (client.Get(path).IsSymbolicLink) return false; }
-        catch (Exception) { return false; }
-
-        // Writing the marker needs write permission on the directory — which
-        // deleting its contents needs too, so this rules nothing out.
-        var marker = path.TrimEnd('/') + "/.limen-rm-" + Guid.NewGuid().ToString("n");
-        try { client.WriteAllBytes(marker, []); }
-        catch (Exception) { return false; }
-
-        if (!shell.TryRun($"test -f {RemoteShell.Quote(marker)}", out _))
-        {
-            try { client.DeleteFile(marker); } catch (Exception) { }
-            return false;
-        }
-
-        // A partial rm is still safe to fall back from: the walk finishes the
-        // job, marker included.
-        return shell.TryRun("rm -rf -- " + RemoteShell.Quote(path), out _);
-    }
-
-    private RemoteShell Shell() => _shell ??= new RemoteShell(_route!.ConnectionInfo);
+    private RemoteShell Shell() => _shell ??= new RemoteShell(_route!.ConnectionInfo, _sftpFingerprint);
 
     private void DeleteRemote(string path, bool isDirectory)
     {

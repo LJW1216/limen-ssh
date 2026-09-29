@@ -21,7 +21,8 @@ internal static class RegressionTests
         Paths();
         Wait(Downloads());
         Profiles();
-        ServerDelete();
+        _checks += ServerDeleteTests.Run();
+        _checks += SafetyTests.Run();
         Navigation();
         Console.WriteLine($"PASS: {_checks} regression assertions (no real server or user settings modified)");
         app.Shutdown();
@@ -165,47 +166,6 @@ internal static class RegressionTests
         Check(Get(view, "_transfer") is null, "closed transfer releases cancellation source");
     }
 
-    // The fast delete hands a path to `rm -rf`. A chrooted SFTP subsystem shows
-    // paths that mean something else to the shell, so the fast path must prove
-    // the two agree and fall back to the protocol walk whenever it cannot.
-    private static void ServerDelete()
-    {
-        var client = DispatchProxy.Create<ISftpClient, FakeSftp>();
-        var fake = (FakeSftp)(object)client;
-
-        var chroot = new FakeShell(sees: false);
-        Check(!SftpView.TryDeleteOnServer("/srv/app/cache", client, chroot), "chroot mismatch refuses rm");
-        Check(chroot.Commands.All(command => !command.StartsWith("rm")), "chroot mismatch never reaches rm");
-        Check(fake.Files.Count == 0, "refused probe cleans its marker");
-
-        var same = new FakeShell(sees: true);
-        Check(SftpView.TryDeleteOnServer("/srv/app/cache", client, same), "matching namespace deletes on the server");
-        Check(same.Commands[^1] == "rm -rf -- '/srv/app/cache'", "rm targets the confirmed path");
-        Check(same.Commands[0].StartsWith("test -f '/srv/app/cache/.limen-rm-"), "marker probed where it was written");
-
-        var quoting = new FakeShell(sees: true);
-        Check(SftpView.TryDeleteOnServer("/srv/it's/a dir", client, quoting), "awkward names are quoted, not rejected");
-        Check(quoting.Commands[^1] == "rm -rf -- '/srv/it'" + (char)92 + "''s/a dir'", "single quotes are escaped");
-
-        fake.RefuseWrite = true;
-        var unwritable = new FakeShell(sees: true);
-        Check(!SftpView.TryDeleteOnServer("/srv/app/cache", client, unwritable), "unprovable directory refuses rm");
-        Check(unwritable.Commands.Count == 0, "no marker means no shell command");
-        fake.RefuseWrite = false;
-
-        fake.Symlinks.Add("/srv/app/link");
-        Check(!SftpView.TryDeleteOnServer("/srv/app/link", client, new FakeShell(sees: true)), "symlink is not walked by rm");
-
-        foreach (var (path, why) in new[]
-        {
-            ("/", "root"), ("~", "home shorthand"), ("/etc", "top-level directory"),
-            ("relative/path", "relative path"), ("/srv/*", "glob"),
-            ("/srv/a" + (char)10 + "b", "embedded newline"), ("", "empty path")
-        }) Check(!SftpView.TryDeleteOnServer(path, client, new FakeShell(sees: true)), $"refuses {why}");
-        foreach (var path in new[] { "/srv/app", "/home/user/node_modules", "/var/tmp/build" })
-            Check(SftpView.TryDeleteOnServer(path, client, new FakeShell(sees: true)), $"accepts {path}");
-    }
-
     private static void Profiles()
     {
         var path = Path.Combine(Path.GetTempPath(), "limen-profiles-" + Guid.NewGuid().ToString("N") + ".json");
@@ -251,18 +211,6 @@ internal static class RegressionTests
     private static void Set(object instance, string name, object value) => instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(instance, value);
     private static T Invoke<T>(object instance, string name, params object[] args) =>
         (T)instance.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(instance, args)!;
-}
-
-internal sealed class FakeShell(bool sees) : IRemoteShell
-{
-    public List<string> Commands { get; } = [];
-
-    public bool TryRun(string command, out string error)
-    {
-        error = string.Empty;
-        Commands.Add(command);
-        return !command.StartsWith("test -f") || sees;
-    }
 }
 
 public class FakeSftp : DispatchProxy

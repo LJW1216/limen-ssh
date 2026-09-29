@@ -40,8 +40,24 @@ public sealed class ProfileStore
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         var temp = FilePath + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(Profiles, Options));
-        File.Move(temp, FilePath, overwrite: true);
+
+        // Antivirus scanners open a freshly written file for a moment; replacing
+        // it then fails with a sharing violation that clears on its own.
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(temp, FilePath, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (attempt < SaveAttempts && ex is IOException or UnauthorizedAccessException)
+            {
+                Thread.Sleep(60 * attempt);
+            }
+        }
     }
+
+    private const int SaveAttempts = 5;
 
     public void AddOrUpdate(SshProfile profile)
     {

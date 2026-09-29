@@ -11,8 +11,9 @@ public sealed class SessionLog : IDisposable
     private const char Escape = '\u001b';
     private const char Bell = '\u0007';
 
-    private readonly StreamWriter _writer;
+    private readonly TextWriter _writer;
     private readonly Decoder _decoder = Encoding.UTF8.GetDecoder();
+    private readonly StringBuilder _text = new();
     private readonly Lock _gate = new();
     private char[] _chars = new char[8 * 1024];
     private State _state = State.Text;
@@ -31,16 +32,34 @@ public sealed class SessionLog : IDisposable
 
     public string Path { get; }
 
+    /// Raised once, from the reading thread, when the file stops accepting
+    /// writes — a full disk, a removed drive. The log stops itself; the
+    /// session it was recording must not stop with it.
+    public event Action<Exception>? Faulted;
+
     public SessionLog(string path, string header)
+        : this(new StreamWriter(Prepare(path), append: true, Encoding.UTF8) { AutoFlush = true },
+            System.IO.Path.GetFullPath(path), header)
     {
-        Path = System.IO.Path.GetFullPath(path);
-        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-        _writer = new StreamWriter(Path, append: true, Encoding.UTF8) { AutoFlush = true };
+    }
+
+    internal SessionLog(TextWriter writer, string path, string header)
+    {
+        Path = path;
+        _writer = writer;
         _writer.WriteLine(header);
+    }
+
+    private static string Prepare(string path)
+    {
+        var full = System.IO.Path.GetFullPath(path);
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
+        return full;
     }
 
     public void Append(byte[] buffer, int count)
     {
+        Exception? fault = null;
         lock (_gate)
         {
             if (_disposed || count <= 0) return;
@@ -49,8 +68,24 @@ public sealed class SessionLog : IDisposable
             if (needed > _chars.Length) _chars = new char[needed];
             var produced = _decoder.GetChars(buffer, 0, count, _chars, 0, flush: false);
 
+            _text.Clear();
             for (var i = 0; i < produced; i++) Consume(_chars[i]);
+            if (_text.Length == 0) return;
+
+            // One write per chunk: the writer flushes after every call, and a
+            // flush per character would be a system call per character.
+            try
+            {
+                _writer.Write(_text);
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+            {
+                fault = ex;
+                _disposed = true;
+                try { _writer.Dispose(); } catch (IOException) { }
+            }
         }
+        if (fault is not null) Faulted?.Invoke(fault);
     }
 
     private void Consume(char c)
@@ -92,15 +127,15 @@ public sealed class SessionLog : IDisposable
         switch (c)
         {
             case '\n':
-                _writer.Write(Environment.NewLine);
+                _text.Append(Environment.NewLine);
                 return;
             case '\r':
                 return;                      // progress redraws would double the lines
             case '\t':
-                _writer.Write(c);
+                _text.Append(c);
                 return;
             default:
-                if (!char.IsControl(c)) _writer.Write(c);
+                if (!char.IsControl(c)) _text.Append(c);
                 return;
         }
     }

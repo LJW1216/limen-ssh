@@ -36,6 +36,7 @@ public partial class TerminalView : UserControl, IDisposable
     public event Action<bool>? ConnectedChanged;
     public event Action<string>? RemoteDirectoryChanged;
     public event Action<ServerMetrics?>? MetricsChanged;
+    public event Action? LoggingChanged;
 
     public TerminalView(SshProfile profile, SshConnector connector)
     {
@@ -53,9 +54,20 @@ public partial class TerminalView : UserControl, IDisposable
     public string StartLog(string path)
     {
         StopLog();
-        _log = new SessionLog(path,
+        var log = new SessionLog(path,
             Strings.Format("Log.Started", _profile.DisplayPath, _profile.RoutedTarget, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")));
-        return _log.Path;
+        log.Faulted += error => Dispatcher.BeginInvoke(() => OnLogFaulted(log, error));
+        _log = log;
+        return log.Path;
+    }
+
+    private void OnLogFaulted(SessionLog log, Exception error)
+    {
+        if (_disposed || !ReferenceEquals(_log, log)) return;
+        _log = null;
+        log.Dispose();
+        LoggingChanged?.Invoke();
+        StatusChanged?.Invoke(Strings.Format("Workspace.LogFaulted", _profile.Name, error.Message));
     }
 
     public void StopLog()
@@ -146,8 +158,16 @@ public partial class TerminalView : UserControl, IDisposable
                 var selection = root.GetProperty("text").GetString();
                 if (!string.IsNullOrEmpty(selection))
                 {
-                    Clipboard.SetText(selection);
-                    StatusChanged?.Invoke(Strings.Format("Terminal.Copied", _profile.Name));
+                    // Another process holding the clipboard open makes SetText throw.
+                    try
+                    {
+                        Clipboard.SetText(selection);
+                        StatusChanged?.Invoke(Strings.Format("Terminal.Copied", _profile.Name));
+                    }
+                    catch (System.Runtime.InteropServices.ExternalException ex)
+                    {
+                        StatusChanged?.Invoke(Strings.Format("Terminal.CopyFailed", _profile.Name, ex.Message));
+                    }
                 }
                 break;
             case "paste" when _shell is not null:
@@ -184,9 +204,18 @@ public partial class TerminalView : UserControl, IDisposable
             }
         }
 
-        _ = WriteAsync(Encoding.UTF8.GetBytes(text));
+        // Through xterm rather than straight to the shell: it wraps the text in
+        // bracketed-paste markers when the shell asked for them, so a shell
+        // that supports it holds the lines until the user presses Enter.
+        Browser.CoreWebView2?.PostWebMessageAsJson(
+            JsonSerializer.Serialize(new { type = "paste", text = NormalizePaste(text) }));
         FocusTerminal();
     }
+
+    /// Windows text ends lines with CRLF. A terminal sends CR for Enter, so the
+    /// LF would reach the shell as a second, empty line — doubled blank lines
+    /// in vim, a stray empty command after each line in a heredoc.
+    internal static string NormalizePaste(string text) => text.Replace("\r\n", "\r").Replace('\n', '\r');
 
     private void OnInput(byte[] bytes)
     {

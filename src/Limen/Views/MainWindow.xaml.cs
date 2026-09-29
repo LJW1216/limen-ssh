@@ -285,7 +285,7 @@ public partial class MainWindow : Window
             UserName = Environment.UserName
         };
         if (new ProfileEditorWindow(profile, isNew: true, _store.Profiles) { Owner = this }.ShowDialog() != true) return;
-        _store.AddOrUpdate(profile);
+        if (!Persist(() => _store.AddOrUpdate(profile))) return;
         RebuildTree();
         Status(Strings.Format("Main.Added", profile.DisplayPath), Note.Good);
     }
@@ -295,7 +295,7 @@ public partial class MainWindow : Window
         if (_selected is null) return;
         var draft = _selected.Clone();
         if (new ProfileEditorWindow(draft, isNew: false, _store.Profiles) { Owner = this }.ShowDialog() != true) return;
-        _store.AddOrUpdate(draft);
+        if (!Persist(() => _store.AddOrUpdate(draft))) return;
         _selected = draft;
         RebuildTree();
         SetSelection(draft);
@@ -308,7 +308,7 @@ public partial class MainWindow : Window
         var copy = _selected.Clone();
         copy.Id = Guid.NewGuid().ToString("N");
         copy.Name = Strings.Format("Main.CopySuffix", copy.Name);
-        _store.AddOrUpdate(copy);
+        if (!Persist(() => _store.AddOrUpdate(copy))) return;
         RebuildTree();
         Status(Strings.Format("Main.Duplicated", copy.DisplayPath), Note.Good);
     }
@@ -322,10 +322,30 @@ public partial class MainWindow : Window
         if (confirm != MessageBoxResult.Yes) return;
 
         var removed = _selected;
-        _store.Remove(removed);
+        if (!Persist(() => _store.Remove(removed))) return;
         SetSelection(null);
         RebuildTree();
         Status(Strings.Format("Main.Deleted", removed.DisplayPath));
+    }
+
+    /// The store changes its list before writing it, so a failed write would
+    /// leave the screen showing sessions that exist nowhere on disk. Reloading
+    /// puts the two back in agreement.
+    private bool Persist(Action change)
+    {
+        try
+        {
+            change();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, Strings.Format("Main.SaveFailed", ex.Message), "Limen",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            SetSelection(null);
+            LoadStore();
+            return false;
+        }
     }
 
     // 선택 -----------------------------------------------------------------
