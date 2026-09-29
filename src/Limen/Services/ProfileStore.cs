@@ -15,6 +15,15 @@ public sealed class ProfileStore
     public string FilePath { get; }
     public List<SshProfile> Profiles { get; private set; } = [];
 
+    /// The previous save, kept by every save — the way back from an edit that
+    /// went wrong.
+    public string BackupPath => FilePath + ".bak";
+
+    /// True when the file exists but could not be read. The list on screen is
+    /// then empty while the sessions still sit on disk, so a save would replace
+    /// every one of them with that empty list.
+    public bool IsProtected { get; private set; }
+
     public ProfileStore(string? filePath = null)
     {
         FilePath = Path.GetFullPath(filePath ?? Path.Combine(
@@ -25,18 +34,34 @@ public sealed class ProfileStore
 
     public void Load()
     {
+        IsProtected = false;
         if (!File.Exists(FilePath))
         {
             Profiles = [];
             return;
         }
-        var json = File.ReadAllText(FilePath);
-        Profiles = JsonSerializer.Deserialize<List<SshProfile>>(json, Options) ?? [];
+        try
+        {
+            var json = File.ReadAllText(FilePath);
+            Profiles = JsonSerializer.Deserialize<List<SshProfile>>(json, Options) ?? [];
+        }
+        catch
+        {
+            Profiles = [];
+            IsProtected = true;
+            throw;
+        }
         if (LinkJumpProfiles()) Save();
+    }
+
+    private void ThrowIfProtected()
+    {
+        if (IsProtected) throw new IOException(Strings.Format("Store.Protected", FilePath, BackupPath));
     }
 
     public void Save()
     {
+        ThrowIfProtected();
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         var temp = FilePath + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(Profiles, Options));
@@ -47,7 +72,10 @@ public sealed class ProfileStore
         {
             try
             {
-                File.Move(temp, FilePath, overwrite: true);
+                // Replace swaps the files in one step and keeps the old one as
+                // the backup; Move covers the very first save.
+                if (File.Exists(FilePath)) File.Replace(temp, FilePath, BackupPath);
+                else File.Move(temp, FilePath);
                 return;
             }
             catch (Exception ex) when (attempt < SaveAttempts && ex is IOException or UnauthorizedAccessException)
@@ -61,6 +89,7 @@ public sealed class ProfileStore
 
     public void AddOrUpdate(SshProfile profile)
     {
+        ThrowIfProtected();
         var index = Profiles.FindIndex(p => p.Id == profile.Id);
         if (index < 0) Profiles.Add(profile);
         else Profiles[index] = profile;
@@ -72,6 +101,8 @@ public sealed class ProfileStore
     // Persist connection results without restoring that stale profile snapshot.
     public void UpdateConnectionState(SshProfile session, bool includeCredentials = false)
     {
+        // A pinned key or remembered password is not worth the session list.
+        if (IsProtected) return;
         var current = Profiles.FirstOrDefault(profile => profile.Id == session.Id);
         if (current is null || !current.Host.Equals(session.Host, StringComparison.OrdinalIgnoreCase) ||
             current.Port != session.Port || current.UserName != session.UserName) return;
@@ -97,6 +128,7 @@ public sealed class ProfileStore
 
     public void Remove(SshProfile profile)
     {
+        ThrowIfProtected();
         foreach (var dependent in Profiles.Where(candidate => candidate.JumpProfileId == profile.Id))
         {
             dependent.JumpProfileId = string.Empty;

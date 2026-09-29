@@ -10,7 +10,7 @@
     <AssemblyName>Limen</AssemblyName>
     <Product>Limen</Product>
     <Description>SSH terminal and SFTP file transfer client with saved credentials.</Description>
-    <Version>0.0.1</Version>
+    <Version>0.0.2</Version>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>

@@ -171,7 +171,8 @@ public partial class MainWindow : Window
         {
             StartupLog.Record(_store.FilePath, 0, ex);
             Status(Strings.Format("Main.StoreReadFailedShort", ex.Message), Note.Bad);
-            MessageBox.Show(this, Strings.Format("Main.StoreReadFailed", ex.Message), "Limen",
+            MessageBox.Show(this, Strings.Format("Main.StoreReadFailed", ex.Message) + "\n\n" +
+                Strings.Format("Store.Protected", _store.FilePath, _store.BackupPath), "Limen",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         StoreText.Text = _store.FilePath;
@@ -340,6 +341,13 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // A protected store refused before touching the list, so there is
+            // nothing to resynchronise — and reloading would fail the same way.
+            if (_store.IsProtected)
+            {
+                MessageBox.Show(this, ex.Message, "Limen", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
             MessageBox.Show(this, Strings.Format("Main.SaveFailed", ex.Message), "Limen",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             SetSelection(null);

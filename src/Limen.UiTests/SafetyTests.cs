@@ -27,7 +27,60 @@ internal static class SafetyTests
         Paste();
         LogFaultKeepsSession();
         DeleteRunsUnderSh();
+        StoreNeverOverwritesWhatItCouldNotRead();
         return _checks;
+    }
+
+    // An unreadable sessions.json used to load as an empty list, and the next
+    // edit wrote that empty list over every session the user had.
+    private static void StoreNeverOverwritesWhatItCouldNotRead()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "limen-store-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "sessions.json");
+            var store = new ProfileStore(path);
+            store.AddOrUpdate(new SshProfile { Name = "first", Host = "10.0.0.1", UserName = "app" });
+            Check(!File.Exists(store.BackupPath), "first save has nothing to back up");
+            store.AddOrUpdate(new SshProfile { Name = "second", Host = "10.0.0.2", UserName = "app" });
+            var backup = File.ReadAllText(store.BackupPath);
+            Check(backup.Contains("first") && !backup.Contains("second"), "each save keeps the previous file");
+
+            const string damaged = "[{ \"Name\": \"first\", \"Host\": ";
+            File.WriteAllText(path, damaged);
+            var reader = new ProfileStore(path);
+            try
+            {
+                reader.Load();
+                throw new Exception("damaged file loaded");
+            }
+            catch (System.Text.Json.JsonException) { }
+            Check(reader.IsProtected && reader.Profiles.Count == 0, "unreadable file protects the store");
+
+            var refused = 0;
+            foreach (var change in new Action[]
+            {
+                () => reader.AddOrUpdate(new SshProfile { Name = "new", Host = "10.0.0.3", UserName = "app" }),
+                () => reader.Remove(new SshProfile()),
+                reader.Save
+            })
+            {
+                try { change(); }
+                catch (IOException) { refused++; }
+            }
+            Check(refused == 3, "every write is refused while protected");
+            Check(reader.Profiles.Count == 0, "a refused add leaves the list untouched");
+            reader.UpdateConnectionState(new SshProfile { Host = "10.0.0.1" });
+            Check(File.ReadAllText(path) == damaged, "damaged file is never overwritten");
+
+            File.Copy(reader.BackupPath, path, overwrite: true);
+            reader.Load();
+            Check(!reader.IsProtected && reader.Profiles.Count == 1, "restoring the backup and reloading unlocks the store");
+            reader.AddOrUpdate(new SshProfile { Name = "after", Host = "10.0.0.4", UserName = "app" });
+            Check(File.ReadAllText(path).Contains("after"), "saving works again after recovery");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     // Every key the code or markup asks for must exist in both tables. A key

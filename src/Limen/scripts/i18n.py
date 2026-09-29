@@ -285,6 +285,7 @@ ENTRIES = [
     ("{0}: 클립보드에 복사하지 못했습니다 — {1}", "Terminal.CopyFailed", "{0}: could not copy to the clipboard — {1}"),
     ("{0}: 세션 기록을 중단했습니다 — {1}", "Workspace.LogFaulted", "{0}: session recording stopped — {1}"),
     ("끝에 줄바꿈이 있어 붙여넣는 즉시 실행됩니다", "Paste.TrailingNewline", "Ends in a newline, so it runs as soon as it lands"),
+    ("{0} 을(를) 읽지 못해, 덮어쓰지 않도록 저장을 막았습니다. 파일을 고치거나 직전 저장본 {1} 로 바꾼 뒤 F5로 다시 불러오세요.", "Store.Protected", "{0} could not be read, so saving is blocked to keep it from being overwritten. Fix it, or replace it with the previous save at {1}, then press F5 to reload."),
 ]
 
 SKIP = {"—"}
