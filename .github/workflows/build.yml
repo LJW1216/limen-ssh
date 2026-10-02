@@ -8,11 +8,14 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v5
 
@@ -23,22 +26,127 @@ jobs:
       - name: Build
         run: dotnet build src/Limen/Limen.csproj -c Release --nologo
 
+      - name: Resolve package version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content src/Limen/Limen.csproj -Raw
+          $version = [string]$project.Project.PropertyGroup.Version
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $version = $env:GITHUB_REF_NAME.Substring(1)
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            throw 'Expected a version such as 0.0.3 or 0.0.3-beta.1.'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
       - name: Publish single file
-        run: >
-          dotnet publish src/Limen/Limen.csproj -c Release -r win-x64
-          --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -o outputs/Limen --nologo
+        shell: pwsh
+        env:
+          LIMEN_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          dotnet publish src/Limen/Limen.csproj -c Release -r win-x64 `
+            --self-contained true -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            "-p:Version=$env:LIMEN_VERSION" -o outputs/Limen --nologo
+
+      # Enable only after Foundation onboarding. A signing failure never falls
+      # back to an unsigned release when SIGNPATH_ENABLED is true.
+      - name: Check signing configuration
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+        run: |
+          foreach ($name in @('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID',
+              'SIGNPATH_PROJECT_SLUG', 'SIGNPATH_SIGNING_POLICY_SLUG',
+              'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing signing configuration: $name"
+            }
+          }
+
+      - name: Read executable metadata
+        id: metadata
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $info = (Get-Item -LiteralPath outputs/Limen/Limen.exe).VersionInfo
+          if ($info.ProductName -ne 'Limen') { throw 'Unexpected executable product name.' }
+          "product-version=$($info.ProductVersion)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload unsigned executable for origin verification
+        id: unsigned
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ENABLED == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Limen-unsigned-${{ steps.version.outputs.version }}
+          path: outputs/Limen/Limen.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Request signing and wait for maintainer approval
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: outputs/signed
+          parameters: |
+            version: ${{ toJSON(steps.metadata.outputs.product-version) }}
+
+      - name: Verify signed executable
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        env:
+          LIMEN_PRODUCT_VERSION: ${{ steps.metadata.outputs.product-version }}
+        run: |
+          ./scripts/Verify-ReleaseSignature.ps1 -Path outputs/signed/Limen.exe `
+            -ExpectedProductVersion $env:LIMEN_PRODUCT_VERSION
+          Copy-Item -LiteralPath outputs/signed/Limen.exe -Destination outputs/Limen/Limen.exe
 
       - name: Package
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
+          $version = $env:GITHUB_REF_NAME.Substring(1)
           Copy-Item README.md outputs/Limen/README.md
+          New-Item -ItemType Directory -Force -Path outputs/Limen/docs | Out-Null
+          Copy-Item docs/code-signing.md, docs/code-signing-setup.md outputs/Limen/docs/
           Compress-Archive -Path outputs/Limen/* -DestinationPath "Limen-win-x64-$version.zip"
           Copy-Item outputs/Limen/Limen.exe "Limen-$version.exe"
+
+      - name: Write release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          SIGNPATH_ENABLED: ${{ vars.SIGNPATH_ENABLED }}
+        run: |
+          $notes = @(
+            'Download the `.exe` below and run it - no install needed.',
+            '',
+            'Code signing policy: https://github.com/LJW1216/limen-ssh/blob/main/docs/code-signing.md',
+            ''
+          )
+          if ($env:SIGNPATH_ENABLED -eq 'true') {
+            $notes += 'This executable has a verified Authenticode signature and timestamp.'
+            $notes += 'Free code signing provided by SignPath.io, certificate by SignPath Foundation.'
+            $notes += 'New releases may still show SmartScreen warnings while reputation builds. Enterprise policies may require administrator approval.'
+          } else {
+            $notes += 'This release is unsigned. SignPath Foundation onboarding is not yet active.'
+            $notes += 'Windows may show an unknown-publisher or SmartScreen warning. Follow your organization''s software approval policy.'
+          }
+          $notes | Set-Content -LiteralPath outputs/release-notes.md -Encoding utf8
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -47,8 +155,4 @@ jobs:
           files: |
             Limen-*.exe
             Limen-win-x64-*.zip
-          body: |
-            Download the `.exe` below and run it — no install needed.
-
-            The binary is not code-signed, so SmartScreen warns on first launch:
-            choose **More info → Run anyway**.
+          body_path: outputs/release-notes.md
