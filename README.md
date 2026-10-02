@@ -43,8 +43,15 @@ Windows 10 1809 or later, x64. The terminal renders through
 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/), which ships
 with current Windows.
 
-> The executable is not code-signed, so SmartScreen will warn on first run.
-> Choose **More info → Run anyway**, or build it yourself.
+> Existing 0.0.1 and 0.0.2 executables are unsigned. Code signing integration is
+> prepared; SignPath Foundation approval and account configuration are pending.
+> Check each release's notes for its signing status. Signed new releases may
+> still show SmartScreen warnings, and enterprise policies may require approval.
+
+## Code signing policy
+
+See the [code signing policy and privacy information](docs/code-signing.md).
+Maintainers: [SignPath setup and application details](docs/code-signing-setup.md).
 
 ## Build from source
 
