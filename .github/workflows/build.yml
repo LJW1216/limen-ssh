@@ -121,7 +121,8 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME.Substring(1)
           Copy-Item README.md outputs/Limen/README.md
-          Copy-Item docs/code-signing.md outputs/Limen/CODE-SIGNING.md
+          New-Item -ItemType Directory -Force -Path outputs/Limen/docs | Out-Null
+          Copy-Item docs/code-signing.md, docs/code-signing-setup.md outputs/Limen/docs/
           Compress-Archive -Path outputs/Limen/* -DestinationPath "Limen-win-x64-$version.zip"
           Copy-Item outputs/Limen/Limen.exe "Limen-$version.exe"
 
